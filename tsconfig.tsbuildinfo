@@ -1,0 +1,1 @@
+{"root":["./src/main.ts","./src/router/index.ts","./src/router/routes.ts","./src/types/login.ts","./src/app.vue","./src/views/home/index.vue","./src/views/login/index.vue"],"errors":true,"version":"6.0.3"}
