@@ -1,14 +1,16 @@
-export interface ApiErrorBody {
-  detail?: string | { msg: string }[]
+export interface ApiResponseBody<T> {
+  code: number
+  data: T
+  message: string
 }
 
 export class ApiError extends Error {
-  status: number
+  code: number
 
-  constructor(message: string, status: number) {
+  constructor(message: string, code: number) {
     super(message)
     this.name = 'ApiError'
-    this.status = status
+    this.code = code
   }
 }
 
@@ -22,14 +24,6 @@ export const setToken = (token: string): void => {
 
 export const clearToken = (): void => {
   localStorage.removeItem(TOKEN_KEY)
-}
-
-const parseErrorMessage = (body: ApiErrorBody): string => {
-  if (typeof body.detail === 'string') return body.detail
-  if (Array.isArray(body.detail) && body.detail.length > 0) {
-    return body.detail.map((item) => item.msg).join('；')
-  }
-  return '请求失败，请稍后重试'
 }
 
 export async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
@@ -48,20 +42,16 @@ export async function request<T>(url: string, options: RequestInit = {}): Promis
     headers,
   })
 
-  if (!response.ok) {
-    let message = '请求失败，请稍后重试'
-    try {
-      const body = (await response.json()) as ApiErrorBody
-      message = parseErrorMessage(body)
-    } catch {
-      // ignore json parse errors
-    }
-    throw new ApiError(message, response.status)
+  let body: ApiResponseBody<T>
+  try {
+    body = (await response.json()) as ApiResponseBody<T>
+  } catch {
+    throw new ApiError('请求失败，请稍后重试', response.status || 500)
   }
 
-  if (response.status === 204) {
-    return undefined as T
+  if (body.code !== 200) {
+    throw new ApiError(body.message || '请求失败，请稍后重试', body.code)
   }
 
-  return (await response.json()) as T
+  return body.data
 }
