@@ -53,15 +53,17 @@ const goRegister = async (): Promise<void> => {
 <template>
   <div class="login-page">
     <div class="login-bg" aria-hidden="true">
+      <div class="login-bg__mesh" />
       <div class="login-bg__orb login-bg__orb--1" />
       <div class="login-bg__orb login-bg__orb--2" />
+      <div class="login-bg__orb login-bg__orb--3" />
     </div>
 
     <main class="login-card">
       <header class="login-header">
-        <div class="login-logo">V</div>
+        <div class="login-logo">JJ</div>
         <h1 class="login-title">欢迎回来</h1>
-        <p class="login-subtitle">登录以继续访问您的账户</p>
+        <p class="login-subtitle">登录 JJ Shop，逛商城 · 刷短视频 · 看直播</p>
       </header>
 
       <form class="login-form" @submit.prevent="handleSubmit">
@@ -135,6 +137,13 @@ const goRegister = async (): Promise<void> => {
 
 <style scoped>
 .login-page {
+  --accent: #0f766e;
+  --accent-strong: #0d9488;
+  --accent-bg: rgba(15, 118, 110, 0.12);
+  --accent-border: rgba(13, 148, 136, 0.4);
+  --page-bg: #ecfdf8;
+  --card-bg: rgba(255, 255, 255, 0.92);
+
   height: 100vh;
   height: 100dvh;
   box-sizing: border-box;
@@ -144,6 +153,7 @@ const goRegister = async (): Promise<void> => {
   padding: 24px;
   position: relative;
   overflow: hidden;
+  background: var(--page-bg);
 }
 
 .login-bg {
@@ -152,11 +162,20 @@ const goRegister = async (): Promise<void> => {
   pointer-events: none;
 }
 
+.login-bg__mesh {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 20%, rgba(45, 212, 191, 0.28), transparent 55%),
+    radial-gradient(ellipse 70% 50% at 85% 75%, rgba(14, 116, 144, 0.22), transparent 50%),
+    linear-gradient(160deg, #f0fdfa 0%, #e0f2fe 48%, #ecfeff 100%);
+}
+
 .login-bg__orb {
   position: absolute;
   border-radius: 50%;
   filter: blur(80px);
-  opacity: 0.45;
+  opacity: 0.5;
 }
 
 .login-bg__orb--1 {
@@ -164,7 +183,7 @@ const goRegister = async (): Promise<void> => {
   height: 420px;
   top: -120px;
   right: -80px;
-  background: var(--accent);
+  background: #2dd4bf;
 }
 
 .login-bg__orb--2 {
@@ -172,7 +191,16 @@ const goRegister = async (): Promise<void> => {
   height: 320px;
   bottom: -100px;
   left: -60px;
-  background: var(--accent-border);
+  background: #38bdf8;
+}
+
+.login-bg__orb--3 {
+  width: 220px;
+  height: 220px;
+  top: 40%;
+  left: 45%;
+  background: #99f6e4;
+  opacity: 0.35;
 }
 
 .login-card {
@@ -180,10 +208,13 @@ const goRegister = async (): Promise<void> => {
   width: 100%;
   max-width: 400px;
   padding: 40px 36px;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  background: var(--card-bg);
+  border: 1px solid rgba(15, 118, 110, 0.14);
   border-radius: 20px;
-  box-shadow: var(--shadow);
+  box-shadow:
+    0 20px 40px -20px rgba(15, 118, 110, 0.28),
+    0 8px 16px -8px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(10px);
 }
 
 .login-header {
@@ -198,12 +229,14 @@ const goRegister = async (): Promise<void> => {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--accent);
-  background: var(--accent-bg);
-  border: 1px solid var(--accent-border);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #042f2e;
+  background: linear-gradient(135deg, #5eead4, #14b8a6);
+  border: none;
   border-radius: 14px;
+  box-shadow: 0 8px 18px -8px rgba(13, 148, 136, 0.7);
 }
 
 .login-title {
@@ -379,7 +412,7 @@ const goRegister = async (): Promise<void> => {
   font-family: inherit;
   letter-spacing: 2px;
   color: #fff;
-  background: var(--accent);
+  background: linear-gradient(135deg, #0f766e, #0d9488);
   border: none;
   border-radius: 10px;
   cursor: pointer;
@@ -387,11 +420,13 @@ const goRegister = async (): Promise<void> => {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  transition: opacity 0.2s, transform 0.15s;
+  transition: opacity 0.2s, transform 0.15s, box-shadow 0.2s;
+  box-shadow: 0 10px 20px -12px rgba(13, 148, 136, 0.9);
 }
 
 .login-btn:hover:not(:disabled) {
-  opacity: 0.9;
+  opacity: 0.95;
+  box-shadow: 0 12px 24px -12px rgba(13, 148, 136, 1);
 }
 
 .login-btn:active:not(:disabled) {
