@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { MenuItem } from '@/types/menu'
+import MenuIcon from './MenuIcon.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -84,7 +85,9 @@ function onClick(): void {
       :title="collapsed ? item.title : undefined"
       @click="onClick"
     >
-      <span class="menu-item__dot" aria-hidden="true">{{ item.title.slice(0, 1) }}</span>
+      <span class="menu-item__dot" aria-hidden="true">
+        <MenuIcon :name="item.icon" />
+      </span>
       <span v-show="!collapsed" class="menu-item__label">{{ item.title }}</span>
       <span v-if="hasChildren && !collapsed" class="menu-item__arrow" aria-hidden="true">›</span>
     </button>
@@ -147,8 +150,6 @@ function onClick(): void {
   border-radius: 9px;
   display: grid;
   place-items: center;
-  font-size: 12px;
-  font-weight: 650;
   color: #0f766e;
   background: rgba(13, 148, 136, 0.12);
 }
@@ -196,7 +197,11 @@ function onClick(): void {
 .is-level-2 > .menu-item__btn .menu-item__dot {
   width: 22px;
   height: 22px;
-  font-size: 11px;
   border-radius: 7px;
+}
+
+.is-level-2 > .menu-item__btn .menu-item__dot :deep(.menu-icon) {
+  width: 13px;
+  height: 13px;
 }
 </style>
