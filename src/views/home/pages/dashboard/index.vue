@@ -185,7 +185,7 @@ onUnmounted(() => {
       </div>
       <div class="screen__header-main">
         <div class="screen__title-wrap">
-          <p class="screen__eyebrow">JJ SHOP · REALTIME COMMAND</p>
+          <p class="screen__eyebrow">LEXIANG · REALTIME COMMAND</p>
           <h2 class="screen__title">运营可视化数据大屏</h2>
         </div>
       </div>

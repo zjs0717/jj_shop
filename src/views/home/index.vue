@@ -1,61 +1,141 @@
-<script setup lang="ts">
-import { ref } from 'vue'
-import { RouterView } from 'vue-router'
-import AppSide from '@/components/side/index.vue'
+﻿<script setup lang="ts">
+import { computed } from 'vue'
+import { RouterView, useRoute } from 'vue-router'
+import AppSideNav from '@/components/nav/AppSideNav.vue'
+import AppTabBar from '@/components/nav/AppTabBar.vue'
+import AppTopBar from '@/components/nav/AppTopBar.vue'
+import { useLayoutMode } from '@/composables/useLayoutMode'
 
-const collapsed = ref(false)
+const route = useRoute()
+const { mode, isPc, isTouchLayout } = useLayoutMode()
+
+const isVideo = computed(() => String(route.meta.module || '') === 'video')
+const isDiscover = computed(() => route.name === 'discover' || route.path === '/home' || route.path === '/home/')
+const isDashboard = computed(() => String(route.meta.module || '') === 'dashboard')
+const isMe = computed(() => String(route.meta.module || '') === 'me')
+const isUser = computed(() => String(route.meta.module || '') === 'user')
+const isSearch = computed(() => String(route.meta.module || '') === 'search')
+const hideTop = computed(
+  () => isVideo.value || isDiscover.value || isDashboard.value || isMe.value || isUser.value || isSearch.value,
+)
+const darkChrome = computed(() => isVideo.value || isDiscover.value || isUser.value)
 </script>
 
 <template>
-  <div class="home" :class="{ 'is-collapsed': collapsed }">
-    <AppSide v-model:collapsed="collapsed" />
+  <div
+    class="app-shell"
+    :class="[
+      `is-${mode}`,
+      {
+        'is-video': isVideo,
+        'is-discover': isDiscover,
+        'is-dashboard': isDashboard,
+        'is-user': isUser,
+        'is-pc': isPc,
+        'is-touch': isTouchLayout,
+      },
+    ]"
+  >
+    <AppSideNav v-if="isPc" :dark="darkChrome" />
 
-    <div class="home__main">
-      <main class="home__content">
+    <div class="app-shell__body">
+      <AppTopBar v-if="!hideTop" />
+
+      <main class="app-shell__main">
         <RouterView />
       </main>
+
+      <AppTabBar v-if="isTouchLayout" :dark="darkChrome" />
     </div>
   </div>
 </template>
 
 <style scoped>
-.home {
-  --side-width: 220px;
-  --side-gap: 16px;
-
+.app-shell {
   min-height: 100vh;
   display: flex;
   background:
-    radial-gradient(ellipse 80% 50% at 10% -10%, rgba(45, 212, 191, 0.18), transparent 55%),
-    radial-gradient(ellipse 60% 40% at 90% 0%, rgba(56, 189, 248, 0.12), transparent 50%),
-    linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
-  box-sizing: border-box;
+    radial-gradient(ellipse 70% 45% at 0% 0%, rgba(255, 45, 122, 0.1), transparent 55%),
+    radial-gradient(ellipse 55% 40% at 100% 8%, rgba(123, 62, 255, 0.12), transparent 50%),
+    linear-gradient(180deg, #f7f5fb 0%, #ebe8f4 48%, var(--bg) 100%);
 }
 
-.home.is-collapsed {
-  --side-width: 72px;
+.app-shell.is-video {
+  background: #050508;
 }
 
-.home__main {
+.app-shell.is-discover,
+.app-shell.is-user {
+  background: var(--surface-dark);
+}
+
+.app-shell.is-dashboard {
+  background: #020617;
+}
+
+.app-shell__body {
   flex: 1;
   min-width: 0;
-  margin-left: calc(var(--side-width) + var(--side-gap) * 2);
-  padding: 12px 16px 16px;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  transition: margin-left 0.22s ease;
-  box-sizing: border-box;
+  margin-left: var(--side-w);
 }
 
-.home__content {
+.app-shell__main {
   flex: 1;
   min-height: 0;
+  width: min(var(--content-max), 100%);
+  margin: 0 auto;
+  padding: 12px 16px calc(var(--tab-h) + var(--safe-b) + 12px);
   display: flex;
   flex-direction: column;
 }
 
-.home__content > :deep(*) {
+.app-shell.is-video .app-shell__main,
+.app-shell.is-discover .app-shell__main,
+.app-shell.is-dashboard .app-shell__main,
+.app-shell.is-user .app-shell__main {
+  width: 100%;
+  max-width: none;
+  padding: 0 0 calc(var(--tab-h) + var(--safe-b));
+}
+
+.app-shell__main > :deep(*) {
   flex: 1;
+  min-height: 0;
+}
+
+/* Pad：触控壳层，内容区略宽松 */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .app-shell__main {
+    padding: 16px 24px calc(var(--tab-h) + var(--safe-b) + 16px);
+  }
+
+  .app-shell.is-video .app-shell__main,
+  .app-shell.is-discover .app-shell__main,
+  .app-shell.is-dashboard .app-shell__main,
+  .app-shell.is-user .app-shell__main {
+    padding: 0 0 calc(var(--tab-h) + var(--safe-b));
+  }
+}
+
+/* PC：桌面壳层 */
+@media (min-width: 1024px) {
+  .app-shell__main {
+    padding: 24px 32px 32px;
+  }
+
+  .app-shell.is-video .app-shell__main,
+  .app-shell.is-discover .app-shell__main,
+  .app-shell.is-dashboard .app-shell__main,
+  .app-shell.is-user .app-shell__main {
+    padding: 0;
+  }
+
+  .app-shell.is-discover .app-shell__main,
+  .app-shell.is-user .app-shell__main {
+    overflow: auto;
+  }
 }
 </style>

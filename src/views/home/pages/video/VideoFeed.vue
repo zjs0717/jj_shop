@@ -1,32 +1,64 @@
-<script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { fetchVideoFeed, refreshVideoFeed } from '@/api/video'
+﻿<script setup lang="ts">
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { fetchVideoFeed, recordVideoPlayApi, toggleVideoLikeApi } from '@/api/video'
+import { fetchProfileApi } from '@/api/user'
 import type { VideoFeedData, VideoItem } from '@/types/video'
+import ShortVideoPlayer from '@/components/video/ShortVideoPlayer.vue'
+import { isFollowing, toggleFollow } from '@/utils/follow'
 
+const router = useRouter()
+const route = useRoute()
 const data = ref<VideoFeedData | null>(null)
 const loading = ref(true)
-const refreshing = ref(false)
 const error = ref('')
 const index = ref(0)
-const playing = ref(false)
+const selfId = ref<number | null>(null)
+const followMap = reactive<Record<number, boolean>>({})
+const likeBusy = reactive<Record<string, boolean>>({})
+const playedOnce = reactive<Record<string, boolean>>({})
 
-const trackRef = ref<HTMLElement | null>(null)
-const startX = ref(0)
-const deltaX = ref(0)
+type PlayerExpose = {
+  togglePlay: () => Promise<void>
+  tryPlay: () => Promise<void>
+  pause: () => void
+}
+
+const viewportRef = ref<HTMLElement | null>(null)
+const playerRef = ref<PlayerExpose | null>(null)
+const startY = ref(0)
+const deltaY = ref(0)
 const swiping = ref(false)
+const wheelLock = ref(false)
 
-let pollTimer: ReturnType<typeof setTimeout> | null = null
+/** 手指抖动阈值：超过才算滑动，避免手机端点播放失效 */
+const TAP_SLOP = 16
+
+let wheelTimer: ReturnType<typeof setTimeout> | null = null
+
+function bindPlayer(el: unknown): void {
+  // v-for 内 ref 可能是数组，统一归一成单个实例
+  const raw = el as PlayerExpose | PlayerExpose[] | null
+  playerRef.value = Array.isArray(raw) ? (raw[0] ?? null) : raw
+}
+
+async function toggleActivePlayer(): Promise<void> {
+  const player = playerRef.value
+  if (player) await player.togglePlay()
+}
 
 const list = computed(() => data.value?.list ?? [])
-const current = computed(() => list.value[index.value] || null)
 const canPrev = computed(() => index.value > 0)
 const canNext = computed(() => index.value < list.value.length - 1)
+const empty = computed(() => !loading.value && !error.value && list.value.length === 0)
 
 const trackStyle = computed(() => {
-  const offset = -index.value * 100 + (swiping.value ? (deltaX.value / (window.innerWidth || 1)) * 100 : 0)
+  const vh = viewportRef.value?.clientHeight || window.innerHeight || 800
+  const dragPercent = swiping.value ? (deltaY.value / vh) * 100 : 0
+  const offset = -index.value * 100 + dragPercent
   return {
-    transform: `translate3d(${offset}%, 0, 0)`,
-    transition: swiping.value ? 'none' : 'transform 0.28s ease',
+    transform: `translate3d(0, ${offset}%, 0)`,
+    transition: swiping.value ? 'none' : 'transform 0.32s cubic-bezier(0.22, 0.61, 0.36, 1)',
   }
 })
 
@@ -35,24 +67,24 @@ function formatCount(n: number): string {
   return n.toLocaleString('zh-CN')
 }
 
-function formatDuration(sec: number): string {
-  if (!sec || sec < 0) return '--:--'
-  const m = Math.floor(sec / 60)
-  const s = sec % 60
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+function authorKey(item: VideoItem): number {
+  return Number(item.authorId) || 0
 }
 
-function clearPoll(): void {
-  if (pollTimer) {
-    clearTimeout(pollTimer)
-    pollTimer = null
+function syncFollowMap(items: VideoItem[]): void {
+  for (const item of items) {
+    const id = authorKey(item)
+    if (id && followMap[id] === undefined) {
+      followMap[id] = isFollowing(id)
+    }
   }
 }
 
 function go(nextIndex: number): void {
   if (!list.value.length) return
-  index.value = Math.max(0, Math.min(list.value.length - 1, nextIndex))
-  playing.value = false
+  const next = Math.max(0, Math.min(list.value.length - 1, nextIndex))
+  if (next === index.value) return
+  index.value = next
 }
 
 function prev(): void {
@@ -63,82 +95,202 @@ function next(): void {
   if (canNext.value) go(index.value + 1)
 }
 
-function playCurrent(): void {
-  if (current.value?.playUrl) {
-    playing.value = true
+function beginSwipe(clientY: number): void {
+  if (!list.value.length) return
+  startY.value = clientY
+  deltaY.value = 0
+  swiping.value = true
+}
+
+function moveSwipe(clientY: number): void {
+  if (!swiping.value) return
+  deltaY.value = clientY - startY.value
+}
+
+function endSwipe(allowTap = false): void {
+  if (!swiping.value) return
+  const threshold = Math.min(72, (viewportRef.value?.clientHeight || 600) * 0.12)
+  const abs = Math.abs(deltaY.value)
+  if (deltaY.value < -threshold) next()
+  else if (deltaY.value > threshold) prev()
+  else if (allowTap && abs <= TAP_SLOP) {
+    void toggleActivePlayer()
   }
+  swiping.value = false
+  deltaY.value = 0
 }
 
 function onTouchStart(e: TouchEvent): void {
-  if (!list.value.length) return
-  startX.value = e.touches[0]?.clientX ?? 0
-  deltaX.value = 0
-  swiping.value = true
+  beginSwipe(e.touches[0]?.clientY ?? 0)
 }
 
 function onTouchMove(e: TouchEvent): void {
   if (!swiping.value) return
-  deltaX.value = (e.touches[0]?.clientX ?? 0) - startX.value
+  if (Math.abs((e.touches[0]?.clientY ?? 0) - startY.value) > 8) {
+    e.preventDefault()
+  }
+  moveSwipe(e.touches[0]?.clientY ?? 0)
 }
 
 function onTouchEnd(): void {
+  endSwipe(false)
+}
+
+function onMobileTouchEnd(): void {
+  endSwipe(true)
+}
+
+function onPointerDown(e: PointerEvent): void {
+  if (e.pointerType === 'touch') return
+  if (e.button !== 0) return
+  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  beginSwipe(e.clientY)
+}
+
+function onPointerMove(e: PointerEvent): void {
+  if (e.pointerType === 'touch') return
   if (!swiping.value) return
-  const threshold = 64
-  if (deltaX.value > threshold) prev()
-  else if (deltaX.value < -threshold) next()
-  swiping.value = false
-  deltaX.value = 0
+  moveSwipe(e.clientY)
+}
+
+function onPointerUp(e: PointerEvent): void {
+  if (e.pointerType === 'touch') return
+  endSwipe(false)
+}
+
+function onWheel(e: WheelEvent): void {
+  if (!list.value.length || wheelLock.value) return
+  if (Math.abs(e.deltaY) < 12) return
+  wheelLock.value = true
+  if (e.deltaY > 0) next()
+  else prev()
+  wheelTimer = setTimeout(() => {
+    wheelLock.value = false
+  }, 450)
 }
 
 function onKeydown(e: KeyboardEvent): void {
-  if (e.key === 'ArrowLeft') prev()
-  if (e.key === 'ArrowRight') next()
+  if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    prev()
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    next()
+  }
+}
+
+function jumpToQueryVideo(): void {
+  const vid = String(route.query.v || '')
+  if (!vid || !list.value.length) return
+  const i = list.value.findIndex((item) => String(item.id) === vid)
+  if (i >= 0) index.value = i
+}
+
+async function openAuthor(item: VideoItem, e?: Event): Promise<void> {
+  e?.stopPropagation()
+  e?.preventDefault()
+  const id = authorKey(item)
+  if (!id) return
+  if (selfId.value != null && selfId.value === id) {
+    await router.push('/home/me')
+    return
+  }
+  await router.push(`/home/user/${id}`)
+}
+
+function onFollowClick(item: VideoItem, e: Event): void {
+  e.stopPropagation()
+  e.preventDefault()
+  const id = authorKey(item)
+  if (!id) return
+  if (selfId.value != null && selfId.value === id) {
+    void router.push('/home/me')
+    return
+  }
+  followMap[id] = toggleFollow(id)
+}
+
+function isSelfAuthor(item: VideoItem): boolean {
+  const id = authorKey(item)
+  return id > 0 && selfId.value != null && selfId.value === id
+}
+
+async function onLikeClick(item: VideoItem, e: Event): Promise<void> {
+  e.stopPropagation()
+  e.preventDefault()
+  const id = String(item.id)
+  if (!id || likeBusy[id]) return
+  likeBusy[id] = true
+  const prevLiked = Boolean(item.liked)
+  const prevCount = item.likeCount
+  item.liked = !prevLiked
+  item.likeCount = Math.max(0, prevCount + (item.liked ? 1 : -1))
+  try {
+    const res = await toggleVideoLikeApi(id)
+    item.liked = res.liked
+    item.likeCount = res.likeCount
+  } catch (err) {
+    item.liked = prevLiked
+    item.likeCount = prevCount
+    error.value = err instanceof Error ? err.message : '点赞失败'
+    window.setTimeout(() => {
+      if (error.value.includes('点赞') || error.value.includes('登录')) error.value = ''
+    }, 2200)
+  } finally {
+    likeBusy[id] = false
+  }
+}
+
+async function onPlayerPlay(item: VideoItem): Promise<void> {
+  const id = String(item.id)
+  if (!id || playedOnce[id]) return
+  playedOnce[id] = true
+  item.playCount = (item.playCount || 0) + 1
+  try {
+    const res = await recordVideoPlayApi(id)
+    item.playCount = res.playCount
+  } catch {
+    // 播放计数失败不影响观看
+  }
+}
+
+async function searchByTag(tag: string, e?: Event): Promise<void> {
+  e?.stopPropagation()
+  e?.preventDefault()
+  const q = tag.trim()
+  if (!q) return
+  await router.push({ path: '/home/search', query: { q } })
 }
 
 async function load(): Promise<void> {
   loading.value = true
   error.value = ''
-  clearPoll()
   try {
-    const res = await fetchVideoFeed()
-    if (!res.ready || !res.list?.length) {
-      data.value = null
-      pollTimer = setTimeout(() => {
-        void load()
-      }, 1200)
-      return
-    }
-    data.value = res
+    const [feed, me] = await Promise.all([
+      fetchVideoFeed(),
+      fetchProfileApi().catch(() => null),
+    ])
+    data.value = feed
+    selfId.value = me?.id ?? null
+    syncFollowMap(feed.list)
     index.value = 0
-    playing.value = false
+    await nextTick()
+    jumpToQueryVideo()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '加载失败'
+    data.value = { total: 0, list: [] }
   } finally {
     loading.value = false
   }
 }
 
-async function onRefresh(): Promise<void> {
-  refreshing.value = true
-  error.value = ''
-  data.value = null
-  loading.value = true
-  playing.value = false
-  try {
-    data.value = await refreshVideoFeed()
-    index.value = 0
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : '刷新失败'
-    await load()
-  } finally {
-    loading.value = false
-    refreshing.value = false
-  }
-}
-
-watch(index, () => {
-  playing.value = false
-})
+watch(
+  () => route.query.v,
+  () => {
+    jumpToQueryVideo()
+  },
+)
 
 onMounted(() => {
   void load()
@@ -146,382 +298,683 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  clearPoll()
+  if (wheelTimer) clearTimeout(wheelTimer)
   window.removeEventListener('keydown', onKeydown)
 })
 </script>
 
 <template>
-  <section class="phone">
-    <header class="phone__bar">
-      <div>
-        <h2 class="phone__title">推荐</h2>
-        <p class="phone__desc">
-          左右滑动切换 · 共 {{ list.length || 10 }} 条
-          <template v-if="data?.ready"> · {{ index + 1 }}/{{ list.length }}</template>
-        </p>
-      </div>
-      <button type="button" class="phone__refresh" :disabled="loading || refreshing" @click="onRefresh">
-        {{ refreshing ? '爬取中…' : '换一批' }}
+  <section class="reels">
+    <nav class="reels__tabs" aria-label="短视频频道">
+      <RouterLink class="is-active" to="/home/video">推荐</RouterLink>
+      <RouterLink to="/home/video/follow">关注</RouterLink>
+      <RouterLink to="/home/video/nearby">同城</RouterLink>
+    </nav>
+
+    <div class="reels__tools">
+      <button type="button" class="reels__search" @click="router.push('/home/search')">搜索</button>
+      <button type="button" class="reels__upload" @click="router.push('/home/me/upload')">
+        上传
       </button>
-    </header>
+    </div>
 
-    <p v-if="error" class="phone__error">{{ error }}</p>
+    <p v-if="error" class="reels__error">{{ error }}</p>
 
-    <div v-if="loading || refreshing || !data" class="phone__stage phone__stage--skeleton" aria-busy="true">
-      <div class="skeleton-phone">
-        <div class="skeleton-phone__media" />
-        <div class="skeleton-phone__line" />
-        <div class="skeleton-phone__line short" />
+    <div v-if="loading" class="reels__viewport reels__viewport--skeleton" aria-busy="true">
+      <div class="skeleton">
+        <div class="skeleton__glow" />
+        <p>加载短视频…</p>
       </div>
     </div>
 
-    <div
-      v-else
-      class="phone__stage"
-      @touchstart.passive="onTouchStart"
-      @touchmove.passive="onTouchMove"
-      @touchend="onTouchEnd"
-    >
-      <button type="button" class="nav nav--prev" :disabled="!canPrev" aria-label="上一个" @click="prev">‹</button>
-      <button type="button" class="nav nav--next" :disabled="!canNext" aria-label="下一个" @click="next">›</button>
+    <div v-else-if="empty" class="reels__viewport reels__viewport--empty">
+      <div class="empty">
+        <h2>还没有人发布短视频</h2>
+        <p>上传你的第一条，成为推荐流里的第一位</p>
+        <button type="button" @click="router.push('/home/me/upload')">去上传</button>
+      </div>
+    </div>
 
-      <div ref="trackRef" class="phone__track" :style="trackStyle">
-        <article v-for="(item, i) in list" :key="item.id" class="slide">
-          <div class="slide__frame">
-            <!-- 当前条播放：B 站嵌入播放器 -->
-            <iframe
-              v-if="playing && i === index && item.playUrl"
-              class="slide__player"
+    <div v-else ref="viewportRef" class="reels__viewport">
+      <div class="reels__track" :style="trackStyle">
+        <article v-for="(item, i) in list" :key="item.id" class="reel">
+          <div
+            class="reel__swipe"
+            aria-hidden="true"
+            @touchstart.passive="onTouchStart"
+            @touchmove="onTouchMove"
+            @touchend="onTouchEnd"
+            @touchcancel="onTouchEnd"
+            @pointerdown="onPointerDown"
+            @pointermove="onPointerMove"
+            @pointerup="onPointerUp"
+            @pointercancel="onPointerUp"
+            @wheel.prevent="onWheel"
+          />
+
+          <div class="reel__phone">
+            <ShortVideoPlayer
+              v-if="i === index && item.playUrl"
+              :ref="bindPlayer"
               :src="item.playUrl"
-              scrolling="no"
-              border="0"
-              frameborder="no"
-              framespacing="0"
-              allowfullscreen="true"
-              title="video-player"
+              :cover="item.cover"
+              :active="i === index"
+              @play="onPlayerPlay(item)"
+              @ended="next"
+            />
+            <img
+              v-else-if="item.cover"
+              class="reel__cover"
+              :src="item.cover"
+              :alt="item.title"
+              loading="lazy"
+            />
+            <div v-else class="reel__cover reel__cover--blank" />
+
+            <div
+              class="reel__gesture-mobile"
+              @touchstart.passive="onTouchStart"
+              @touchmove="onTouchMove"
+              @touchend="onMobileTouchEnd"
+              @touchcancel="onMobileTouchEnd"
             />
 
-            <!-- 未播放：封面 + 播放按钮 -->
-            <template v-else>
-              <img
-                class="slide__cover"
-                :src="item.cover"
-                :alt="item.title"
-                referrerpolicy="no-referrer"
-                loading="lazy"
-              />
-              <button
-                v-if="i === index"
-                type="button"
-                class="slide__play"
-                :disabled="!item.playUrl"
-                @click="playCurrent"
-              >
-                {{ item.playUrl ? '▶ 播放' : '暂不可播' }}
-              </button>
-              <span class="slide__duration">{{ formatDuration(item.duration) }}</span>
-            </template>
+            <div class="reel__mask" />
 
-            <div class="slide__info">
-              <h3>{{ item.title }}</h3>
-              <p>@{{ item.author }}</p>
-              <div class="slide__meta">
-                <span>播放 {{ formatCount(item.playCount) }}</span>
-                <span>点赞 {{ formatCount(item.likeCount) }}</span>
+            <aside class="reel__actions">
+              <div class="reel__avatar-wrap">
+                <button
+                  type="button"
+                  class="reel__avatar"
+                  :disabled="!item.authorId"
+                  :aria-label="`查看 @${item.author} 的主页`"
+                  @click="openAuthor(item, $event)"
+                >
+                  <img v-if="item.authorAvatar" :src="item.authorAvatar" :alt="item.author" />
+                  <span v-else>{{ (item.author || 'U').slice(0, 1) }}</span>
+                </button>
+                <button
+                  v-if="item.authorId && !isSelfAuthor(item)"
+                  type="button"
+                  class="reel__follow"
+                  :class="{ 'is-on': followMap[authorKey(item)] }"
+                  :aria-label="followMap[authorKey(item)] ? '取消关注' : '关注'"
+                  @click="onFollowClick(item, $event)"
+                >
+                  {{ followMap[authorKey(item)] ? '✓' : '+' }}
+                </button>
+              </div>
+              <button
+                type="button"
+                class="reel__stat reel__stat--btn"
+                :class="{ 'is-liked': item.liked }"
+                :aria-label="item.liked ? '取消点赞' : '点赞'"
+                :disabled="likeBusy[String(item.id)]"
+                @click="onLikeClick(item, $event)"
+              >
+                <span class="reel__heart" aria-hidden="true">{{ item.liked ? '♥' : '♡' }}</span>
+                <strong>{{ formatCount(item.likeCount) }}</strong>
+                <span>赞</span>
+              </button>
+              <div class="reel__stat">
+                <strong>{{ formatCount(item.playCount) }}</strong>
+                <span>播</span>
+              </div>
+            </aside>
+
+            <div class="reel__info">
+              <button
+                type="button"
+                class="reel__author"
+                :disabled="!item.authorId"
+                @click="openAuthor(item, $event)"
+              >
+                @{{ item.author }}
+              </button>
+              <h3 class="reel__name">{{ item.title }}</h3>
+              <p v-if="item.description" class="reel__desc">{{ item.description }}</p>
+              <div v-if="item.tags?.length" class="reel__tags">
+                <button
+                  v-for="tag in item.tags.slice(0, 4)"
+                  :key="tag"
+                  type="button"
+                  class="reel__tag"
+                  @click="searchByTag(tag, $event)"
+                >
+                  #{{ tag }}
+                </button>
               </div>
             </div>
-          </div>
-        </article>
-      </div>
 
-      <div class="phone__dots">
-        <i
-          v-for="(item, i) in list"
-          :key="`dot-${item.id}`"
-          :class="{ 'is-on': i === index }"
-          @click="go(i)"
-        />
+            <div v-if="i === index" class="reel__hint">
+              {{ canNext ? '上滑看下一条' : canPrev ? '下滑看上一条' : '' }}
+            </div>
+          </div>
+
+          <div
+            class="reel__swipe"
+            aria-hidden="true"
+            @touchstart.passive="onTouchStart"
+            @touchmove="onTouchMove"
+            @touchend="onTouchEnd"
+            @touchcancel="onTouchEnd"
+            @pointerdown="onPointerDown"
+            @pointermove="onPointerMove"
+            @pointerup="onPointerUp"
+            @pointercancel="onPointerUp"
+            @wheel.prevent="onWheel"
+          />
+        </article>
       </div>
     </div>
   </section>
 </template>
 
 <style scoped>
-.phone {
-  --phone-w: min(420px, 100%);
+.reels {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  min-height: calc(100vh - 48px);
+  min-height: calc(100dvh - var(--tab-h) - var(--safe-b));
+  background: #050508;
+  touch-action: pan-y;
 }
 
-.phone__bar {
+.reels__tabs {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
+  gap: 20px;
+  white-space: nowrap;
 }
 
-.phone__title {
-  margin: 0 0 4px;
-  font-size: 18px;
-  font-weight: 650;
-  color: #0f172a;
+.reels__tabs a {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 16px;
+  font-weight: 600;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
 }
 
-.phone__desc {
-  margin: 0;
-  font-size: 13px;
-  color: #64748b;
+.reels__tabs a.is-active {
+  color: #fff;
+  position: relative;
 }
 
-.phone__refresh {
-  height: 36px;
-  padding: 0 14px;
-  border: 1px solid #99f6e4;
+.reels__tabs a.is-active::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: 16px;
+  height: 3px;
   border-radius: 999px;
-  background: #f0fdfa;
-  color: #0f766e;
+  background: var(--brand);
+  transform: translateX(-50%);
+}
+
+.reels__tools {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 10;
+  display: flex;
+  gap: 8px;
+}
+
+.reels__search,
+.reels__upload {
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 700;
   cursor: pointer;
+  white-space: nowrap;
 }
 
-.phone__refresh:disabled {
-  opacity: 0.6;
-  cursor: wait;
+.reels__search {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.18);
 }
 
-.phone__error {
+.reels__upload {
+  background: var(--brand-gradient);
+  color: #fff;
+}
+
+.reels__error {
+  position: absolute;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
   margin: 0;
-  color: #e11d48;
-  font-size: 14px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(255, 45, 122, 0.9);
+  color: #fff;
+  font-size: 13px;
+  white-space: nowrap;
 }
 
-.phone__stage {
+.reels__viewport {
   position: relative;
   flex: 1;
-  min-height: 640px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  min-height: calc(100dvh - var(--tab-h) - var(--safe-b));
   overflow: hidden;
-  border-radius: 24px;
-  background:
-    radial-gradient(ellipse 60% 40% at 50% 0%, rgba(45, 212, 191, 0.16), transparent 55%),
-    #0b1220;
-  border: 1px solid #1e293b;
-  touch-action: pan-y;
+  background: #050508;
   user-select: none;
 }
 
-.phone__stage--skeleton {
-  background: #0b1220;
+.reels__viewport--skeleton,
+.reels__viewport--empty {
+  display: grid;
+  place-items: center;
 }
 
-.phone__track {
+.empty {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.72);
+  padding: 24px;
+}
+
+.empty h2 {
+  color: #fff;
+  font-size: 20px;
+  margin-bottom: 8px;
+}
+
+.empty p {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.empty button {
+  margin-top: 16px;
+  height: 42px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--brand-gradient);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.reels__track {
   display: flex;
-  width: var(--phone-w);
-  height: min(78vh, 720px);
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
   will-change: transform;
 }
 
-.slide {
+.reel {
   flex: 0 0 100%;
-  width: 100%;
   height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 12px;
-  box-sizing: border-box;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr minmax(0, min(420px, 100%)) 1fr;
+  align-items: stretch;
 }
 
-.slide__frame {
+.reel__swipe {
+  min-width: 0;
+  height: 100%;
+  z-index: 7;
+  touch-action: none;
+  cursor: grab;
+}
+
+.reel__phone {
   position: relative;
   width: 100%;
   height: 100%;
-  max-width: 400px;
-  border-radius: 28px;
   overflow: hidden;
-  background: #020617;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+  background: #000;
 }
 
-.slide__cover,
-.slide__player {
+.reel__cover {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
-  display: block;
   object-fit: cover;
-  background: #020617;
+  background: #111;
 }
 
-.slide__player {
-  border: 0;
+.reel__cover--blank {
+  background: var(--surface-dark-elevated);
 }
 
-.slide__play {
+.reel__gesture-mobile {
+  display: none;
+}
+
+.reel__mask {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.28), transparent 22%),
+    linear-gradient(0deg, rgba(0, 0, 0, 0.72), transparent 38%);
+}
+
+.reel__actions {
+  position: absolute;
+  right: 12px;
+  bottom: 120px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  pointer-events: none;
+}
+
+.reel__avatar-wrap {
+  position: relative;
+  width: 48px;
+  height: 54px;
+  pointer-events: auto;
+}
+
+.reel__avatar {
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: var(--brand-gradient);
+  color: #fff;
+  font-weight: 700;
+  border: 2px solid #fff;
+  cursor: pointer;
+}
+
+.reel__avatar:disabled {
+  cursor: default;
+  opacity: 0.9;
+}
+
+.reel__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.reel__follow {
   position: absolute;
   left: 50%;
-  top: 46%;
-  transform: translate(-50%, -50%);
-  z-index: 3;
-  height: 48px;
-  padding: 0 22px;
-  border: none;
-  border-radius: 999px;
-  background: rgba(15, 118, 110, 0.92);
-  color: #ecfeff;
-  font: inherit;
-  font-size: 15px;
-  font-weight: 650;
-  cursor: pointer;
-  box-shadow: 0 10px 30px rgba(15, 118, 110, 0.45);
-}
-
-.slide__play:disabled {
-  background: rgba(71, 85, 105, 0.9);
-  box-shadow: none;
-  cursor: not-allowed;
-}
-
-.slide__duration {
-  position: absolute;
-  right: 14px;
-  top: 14px;
-  z-index: 2;
-  padding: 4px 8px;
-  border-radius: 8px;
-  background: rgba(2, 6, 23, 0.7);
-  color: #f8fafc;
-  font-size: 12px;
-}
-
-.slide__info {
-  position: absolute;
-  left: 0;
-  right: 0;
   bottom: 0;
-  z-index: 2;
-  padding: 48px 16px 18px;
-  background: linear-gradient(180deg, transparent, rgba(2, 6, 23, 0.88));
+  transform: translateX(-50%);
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--brand);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.reel__follow.is-on {
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--brand);
+  font-size: 11px;
+}
+
+.reel__stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
   color: #f8fafc;
 }
 
-.slide__info h3 {
+.reel__stat--btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: transform 0.15s ease;
+}
+
+.reel__stat--btn:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.reel__stat--btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.reel__stat--btn.is-liked {
+  color: #ff6b9d;
+}
+
+.reel__stat--btn.is-liked span:last-child {
+  color: #ffb3cb;
+}
+
+.reel__heart {
+  font-size: 22px;
+  line-height: 1;
+  margin-bottom: 2px;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.reel__stat strong {
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.reel__stat span {
+  font-size: 11px;
+  color: #cbd5e1;
+}
+
+.reel__info {
+  position: absolute;
+  left: 14px;
+  right: 72px;
+  bottom: 28px;
+  z-index: 6;
+  color: #f8fafc;
+  pointer-events: none;
+}
+
+.reel__author {
+  appearance: none;
+  display: inline-block;
   margin: 0 0 6px;
-  font-size: 15px;
-  line-height: 1.4;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 650;
+  font-family: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+.reel__author:disabled {
+  cursor: default;
+}
+
+.reel__author:not(:disabled):active {
+  opacity: 0.85;
+}
+
+.reel__name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.45;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
-.slide__info p {
-  margin: 0 0 8px;
-  font-size: 13px;
+.reel__desc {
+  margin-top: 6px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.reel__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  pointer-events: auto;
+}
+
+.reel__tag {
+  appearance: none;
+  border: 0;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.reel__hint {
+  position: absolute;
+  left: 50%;
+  top: 52px;
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(2, 6, 23, 0.45);
+  color: rgba(226, 232, 240, 0.85);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.skeleton {
+  text-align: center;
   color: #94a3b8;
 }
 
-.slide__meta {
-  display: flex;
-  gap: 14px;
-  font-size: 12px;
-  color: #cbd5e1;
-}
-
-.nav {
-  position: absolute;
-  top: 50%;
-  z-index: 5;
-  transform: translateY(-50%);
-  width: 42px;
-  height: 42px;
-  border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  background: rgba(15, 23, 42, 0.72);
-  color: #e2e8f0;
-  font-size: 28px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.nav:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.nav--prev { left: 16px; }
-.nav--next { right: 16px; }
-
-.phone__dots {
-  position: absolute;
-  left: 50%;
-  bottom: 14px;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 6px;
-  z-index: 5;
-}
-
-.phone__dots i {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.45);
-  cursor: pointer;
-}
-
-.phone__dots i.is-on {
-  width: 16px;
-  background: #2dd4bf;
-}
-
-.skeleton-phone {
-  width: min(400px, 86%);
-  height: min(78vh, 720px);
-  border-radius: 28px;
-  overflow: hidden;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: #020617;
-  padding: 16px;
-  box-sizing: border-box;
-}
-
-.skeleton-phone__media {
-  height: 78%;
+.skeleton__glow {
+  width: min(360px, 78vw);
+  height: min(72vh, 620px);
+  margin: 0 auto 14px;
   border-radius: 18px;
-  background: linear-gradient(90deg, #1e293b 25%, #334155 37%, #1e293b 63%);
+  background: linear-gradient(90deg, #111113 25%, #1c1b22 37%, #111113 63%);
   background-size: 400% 100%;
   animation: shimmer 1.2s ease-in-out infinite;
-}
-
-.skeleton-phone__line {
-  margin-top: 14px;
-  height: 12px;
-  width: 88%;
-  border-radius: 6px;
-  background: linear-gradient(90deg, #1e293b 25%, #334155 37%, #1e293b 63%);
-  background-size: 400% 100%;
-  animation: shimmer 1.2s ease-in-out infinite;
-}
-
-.skeleton-phone__line.short {
-  width: 52%;
-  margin-top: 10px;
 }
 
 @keyframes shimmer {
-  0% { background-position: 100% 0; }
-  100% { background-position: 0 0; }
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
 }
 
-@media (max-width: 900px) {
-  .nav { display: none; }
-  .phone__stage { min-height: 560px; }
+@media (max-width: 720px) {
+  .reel {
+    grid-template-columns: 0 minmax(0, 1fr) 0;
+  }
+
+  .reel__swipe {
+    display: none;
+  }
+
+  .reel__gesture-mobile {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 72px; /* 右侧操作栏可点 */
+    bottom: 88px; /* 底部进度/静音可点 */
+    z-index: 5;
+    touch-action: none;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .reel {
+    grid-template-columns: 1fr minmax(0, min(460px, 100%)) 1fr;
+  }
+
+  .reel__phone {
+    border-radius: 18px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  }
+}
+
+@media (min-width: 1024px) {
+  .reels,
+  .reels__viewport {
+    min-height: 100vh;
+  }
+
+  .reels__viewport {
+    padding: 20px 0;
+  }
+
+  .reel {
+    grid-template-columns: 1fr minmax(0, min(440px, 38vw)) 1fr;
+    padding: 0 24px;
+  }
+
+  .reel__phone {
+    border-radius: 22px;
+    box-shadow:
+      0 28px 72px rgba(0, 0, 0, 0.55),
+      0 0 0 1px rgba(255, 255, 255, 0.06);
+  }
+
+  .reels__tools {
+    right: 28px;
+  }
+
+  .reels__search,
+  .reels__upload {
+    height: 36px;
+    padding: 0 16px;
+    font-size: 13px;
+  }
 }
 </style>
