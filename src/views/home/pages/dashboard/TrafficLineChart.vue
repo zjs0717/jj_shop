@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { TrafficPoint, DashboardModule } from '@/types/dashboard'
+import { moduleColor, moduleLabel } from './format'
 
 const props = defineProps<{
   data: TrafficPoint[]
@@ -16,10 +17,14 @@ const height = 220
 const pad = { top: 16, right: 16, bottom: 28, left: 40 }
 const hoverIndex = ref<number | null>(null)
 
-const series = [
-  { key: 'shop' as const, color: '#2dd4bf', label: '购物' },
-  { key: 'video' as const, color: '#38bdf8', label: '短视频' },
-  { key: 'live' as const, color: '#f59e0b', label: '直播' },
+const series: { key: DashboardModule; color: string; label: string }[] = [
+  { key: 'order', color: moduleColor.order, label: moduleLabel.order },
+  { key: 'video', color: moduleColor.video, label: moduleLabel.video },
+  { key: 'exam', color: moduleColor.exam, label: moduleLabel.exam },
+  { key: 'production', color: moduleColor.production, label: moduleLabel.production },
+  { key: 'offline', color: moduleColor.offline, label: moduleLabel.offline },
+  { key: 'supervise', color: moduleColor.supervise, label: moduleLabel.supervise },
+  { key: 'live', color: moduleColor.live, label: moduleLabel.live },
 ]
 
 const chart = computed(() => {
@@ -33,7 +38,7 @@ const chart = computed(() => {
     }
   }
 
-  const values = points.flatMap((p) => [p.shop, p.video, p.live])
+  const values = points.flatMap((p) => series.map((s) => p[s.key]))
   const max = Math.max(...values, 1)
   const min = 0
   const innerW = width - pad.left - pad.right
@@ -149,7 +154,7 @@ function toggleSeries(key: DashboardModule): void {
           :y2="height - pad.bottom"
           class="line-chart__cross"
         />
-        <foreignObject :x="Math.min(chart.hover.x + 8, width - 130)" y="18" width="120" height="78">
+        <foreignObject :x="Math.min(chart.hover.x + 8, width - 156)" y="8" width="148" height="168">
           <div class="line-chart__tip" xmlns="http://www.w3.org/1999/xhtml">
             <strong>{{ chart.hover.time }}</strong>
             <p v-for="item in chart.hover.items" :key="item.label">
@@ -183,7 +188,7 @@ function toggleSeries(key: DashboardModule): void {
 
 .line-chart__legend {
   display: flex;
-  gap: 10px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -191,13 +196,13 @@ function toggleSeries(key: DashboardModule): void {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
   color: #94a3b8;
   background: transparent;
   border: 1px solid transparent;
-  padding: 4px 8px;
-  cursor: pointer;
+  padding: 3px 6px;
   font: inherit;
+  font-size: 11px;
+  cursor: pointer;
   transition: border-color 0.15s, color 0.15s, opacity 0.15s;
 }
 

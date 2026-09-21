@@ -1,4 +1,11 @@
-export type DashboardModule = 'shop' | 'video' | 'live'
+export type DashboardModule =
+  | 'order'
+  | 'video'
+  | 'exam'
+  | 'production'
+  | 'offline'
+  | 'supervise'
+  | 'live'
 
 export interface DashboardOverview {
   onlineUsers: number
@@ -7,37 +14,63 @@ export interface DashboardOverview {
   gmv: number
 }
 
-export interface ShopModuleStats {
+export interface OrderModuleStats {
   gmv: number
   orders: number
   visitors: number
   conversionRate: number
-  cartUsers: number
-  refundRate: number
 }
 
 export interface VideoModuleStats {
   plays: number
-  likes: number
-  shares: number
-  comments: number
+  completes: number
   avgWatchSec: number
   publishCount: number
 }
 
+export interface ExamModuleStats {
+  submits: number
+  accuracy: number
+  papers: number
+  finishRate: number
+}
+
+export interface ProductionModuleStats {
+  drills: number
+  masteryRate: number
+  rules: number
+  applications: number
+}
+
+export interface OfflineModuleStats {
+  attendance: number
+  classes: number
+  attendRate: number
+  campuses: number
+}
+
+export interface SuperviseModuleStats {
+  online: number
+  sessions: number
+  avgRespSec: number
+  coverageRate: number
+}
+
 export interface LiveModuleStats {
-  rooms: number
+  sessions: number
   viewers: number
   peakOnline: number
-  gifts: number
-  durationMin: number
   interactionRate: number
 }
 
 export interface TrafficPoint {
   time: string
-  shop: number
+  order: number
   video: number
+  exam: number
+  production: number
+  offline: number
+  supervise: number
   live: number
 }
 
@@ -75,8 +108,12 @@ export interface DashboardData {
   updatedAt: string
   overview: DashboardOverview
   modules: {
-    shop: ShopModuleStats
+    order: OrderModuleStats
     video: VideoModuleStats
+    exam: ExamModuleStats
+    production: ProductionModuleStats
+    offline: OfflineModuleStats
+    supervise: SuperviseModuleStats
     live: LiveModuleStats
   }
   trafficTrend: TrafficPoint[]

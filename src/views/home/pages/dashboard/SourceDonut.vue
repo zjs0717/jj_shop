@@ -11,7 +11,7 @@ const emit = defineEmits<{
   select: [name: string | null]
 }>()
 
-const colors = ['#2dd4bf', '#38bdf8', '#f59e0b', '#a78bfa']
+const colors = ['#34d399', '#f59e0b', '#38bdf8', '#818cf8', '#2dd4bf']
 
 const slices = computed(() => {
   const total = props.data.reduce((sum, item) => sum + item.value, 0) || 1

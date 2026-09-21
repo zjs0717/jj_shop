@@ -74,14 +74,32 @@ function tickClock(): void {
   nowText.value = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
+type FullscreenHost = HTMLElement & {
+  webkitRequestFullscreen?: () => Promise<void> | void
+}
+
+type FullscreenDocument = Document & {
+  webkitFullscreenElement?: Element | null
+  webkitExitFullscreen?: () => Promise<void> | void
+}
+
+function getFullscreenElement(): Element | null {
+  const doc = document as FullscreenDocument
+  return document.fullscreenElement || doc.webkitFullscreenElement || null
+}
+
 async function toggleFullscreen(): Promise<void> {
-  const el = screenRef.value
+  const el = screenRef.value as FullscreenHost | null
   if (!el) return
+  const doc = document as FullscreenDocument
   try {
-    if (!document.fullscreenElement) {
-      await el.requestFullscreen()
+    if (!getFullscreenElement()) {
+      if (el.requestFullscreen) await el.requestFullscreen()
+      else el.webkitRequestFullscreen?.()
+    } else if (doc.exitFullscreen) {
+      await doc.exitFullscreen()
     } else {
-      await document.exitFullscreen()
+      doc.webkitExitFullscreen?.()
     }
   } catch {
     error.value = '当前浏览器不支持全屏，请手动按 F11'
@@ -89,7 +107,9 @@ async function toggleFullscreen(): Promise<void> {
 }
 
 function onFullscreenChange(): void {
-  isFullscreen.value = document.fullscreenElement === screenRef.value
+  const fs = getFullscreenElement()
+  const el = screenRef.value
+  isFullscreen.value = !!fs && !!el && (fs === el || el.contains(fs))
 }
 
 const kpis = computed(() => {
@@ -99,7 +119,77 @@ const kpis = computed(() => {
     { key: 'online', label: '实时在线', value: formatNumber(o.onlineUsers), tip: 'ACTIVE', module: null as DashboardModule | null },
     { key: 'pv', label: '今日 PV', value: formatNumber(o.todayPV), tip: 'PAGE VIEW', module: null },
     { key: 'uv', label: '今日 UV', value: formatNumber(o.todayUV), tip: 'UNIQUE', module: null },
-    { key: 'gmv', label: '今日 GMV', value: formatMoney(o.gmv), tip: 'GMV', module: 'shop' as DashboardModule },
+    { key: 'gmv', label: '今日订单额', value: formatMoney(o.gmv), tip: 'ORDER', module: 'order' as DashboardModule },
+  ]
+})
+
+const moduleCards = computed(() => {
+  if (!data.value) return []
+  const m = data.value.modules
+  return [
+    {
+      key: 'order' as DashboardModule,
+      title: '订单',
+      rows: [
+        { label: '金额', value: formatMoney(m.order.gmv) },
+        { label: '笔数', value: formatNumber(m.order.orders) },
+        { label: '转化', value: `${m.order.conversionRate}%` },
+      ],
+    },
+    {
+      key: 'video' as DashboardModule,
+      title: '学习视频',
+      rows: [
+        { label: '播放', value: formatNumber(m.video.plays) },
+        { label: '完课', value: formatNumber(m.video.completes) },
+        { label: '人均', value: `${m.video.avgWatchSec}s` },
+      ],
+    },
+    {
+      key: 'exam' as DashboardModule,
+      title: '做试卷',
+      rows: [
+        { label: '提交', value: formatNumber(m.exam.submits) },
+        { label: '正确率', value: `${m.exam.accuracy}%` },
+        { label: '完成率', value: `${m.exam.finishRate}%` },
+      ],
+    },
+    {
+      key: 'production' as DashboardModule,
+      title: '学习产生式',
+      rows: [
+        { label: '练习', value: formatNumber(m.production.drills) },
+        { label: '掌握', value: `${m.production.masteryRate}%` },
+        { label: '应用', value: formatNumber(m.production.applications) },
+      ],
+    },
+    {
+      key: 'offline' as DashboardModule,
+      title: '线下辅导',
+      rows: [
+        { label: '到课', value: formatNumber(m.offline.attendance) },
+        { label: '班次', value: formatNumber(m.offline.classes) },
+        { label: '出勤', value: `${m.offline.attendRate}%` },
+      ],
+    },
+    {
+      key: 'supervise' as DashboardModule,
+      title: '在线督导',
+      rows: [
+        { label: '在岗', value: formatNumber(m.supervise.online) },
+        { label: '连线', value: formatNumber(m.supervise.sessions) },
+        { label: '响应', value: `${m.supervise.avgRespSec}s` },
+      ],
+    },
+    {
+      key: 'live' as DashboardModule,
+      title: '直播课',
+      rows: [
+        { label: '在课', value: formatNumber(m.live.viewers) },
+        { label: '场次', value: formatNumber(m.live.sessions) },
+        { label: '互动', value: `${m.live.interactionRate}%` },
+      ],
+    },
   ]
 })
 
@@ -154,14 +244,18 @@ onMounted(() => {
   tickClock()
   clockTimer = setInterval(tickClock, 1000)
   document.addEventListener('fullscreenchange', onFullscreenChange)
+  document.addEventListener('webkitfullscreenchange', onFullscreenChange)
 })
 
 onUnmounted(() => {
   clearPoll()
   if (clockTimer) clearInterval(clockTimer)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
-  if (document.fullscreenElement === screenRef.value) {
-    void document.exitFullscreen()
+  document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
+  if (getFullscreenElement()) {
+    const doc = document as FullscreenDocument
+    if (doc.exitFullscreen) void doc.exitFullscreen()
+    else doc.webkitExitFullscreen?.()
   }
 })
 </script>
@@ -189,20 +283,15 @@ onUnmounted(() => {
           <h2 class="screen__title">运营可视化数据大屏</h2>
         </div>
       </div>
-      <div class="screen__actions">
-        <label class="screen__poll">
-          <span>轮询</span>
-          <select v-model.number="pollMs" @change="onPollChange">
-            <option v-for="opt in POLL_OPTIONS" :key="opt.value" :value="opt.value">
-              {{ opt.label }}
-            </option>
-          </select>
-        </label>
-        <button type="button" class="screen__btn" :disabled="ticking" @click="load">刷新</button>
-        <button type="button" class="screen__btn screen__btn--primary" @click="toggleFullscreen">
-          {{ isFullscreen ? '退出全屏' : '最大化' }}
-        </button>
-      </div>
+      <div class="screen__actions" />
+      <button
+        v-if="!isFullscreen"
+        type="button"
+        class="screen__fullscreen"
+        @click="toggleFullscreen"
+      >
+        最大化
+      </button>
     </header>
 
     <p v-if="error" class="screen__error">{{ error }}</p>
@@ -242,42 +331,25 @@ onUnmounted(() => {
           <ScreenPanel title="业务模块看板">
             <div class="module-cards">
               <button
+                v-for="card in moduleCards"
+                :key="card.key"
                 type="button"
-                class="module-card module-card--shop"
-                :class="{ 'is-active': focusModule === 'shop', 'is-dim': focusModule && focusModule !== 'shop' }"
-                @click="toggleModule('shop')"
+                class="module-card"
+                :class="[
+                  `module-card--${card.key}`,
+                  { 'is-active': focusModule === card.key, 'is-dim': !!(focusModule && focusModule !== card.key) },
+                ]"
+                @click="toggleModule(card.key)"
               >
-                <h4>购物</h4>
-                <p><span>GMV</span><strong>{{ formatMoney(data.modules.shop.gmv) }}</strong></p>
-                <p><span>订单</span><strong>{{ formatNumber(data.modules.shop.orders) }}</strong></p>
-                <p><span>转化</span><strong>{{ data.modules.shop.conversionRate }}%</strong></p>
-              </button>
-              <button
-                type="button"
-                class="module-card module-card--video"
-                :class="{ 'is-active': focusModule === 'video', 'is-dim': focusModule && focusModule !== 'video' }"
-                @click="toggleModule('video')"
-              >
-                <h4>短视频</h4>
-                <p><span>播放</span><strong>{{ formatNumber(data.modules.video.plays) }}</strong></p>
-                <p><span>点赞</span><strong>{{ formatNumber(data.modules.video.likes) }}</strong></p>
-                <p><span>人均</span><strong>{{ data.modules.video.avgWatchSec }}s</strong></p>
-              </button>
-              <button
-                type="button"
-                class="module-card module-card--live"
-                :class="{ 'is-active': focusModule === 'live', 'is-dim': focusModule && focusModule !== 'live' }"
-                @click="toggleModule('live')"
-              >
-                <h4>直播</h4>
-                <p><span>观看</span><strong>{{ formatNumber(data.modules.live.viewers) }}</strong></p>
-                <p><span>打赏</span><strong>{{ formatMoney(data.modules.live.gifts) }}</strong></p>
-                <p><span>互动</span><strong>{{ data.modules.live.interactionRate }}%</strong></p>
+                <h4>{{ card.title }}</h4>
+                <p v-for="row in card.rows" :key="row.label">
+                  <span>{{ row.label }}</span><strong>{{ row.value }}</strong>
+                </p>
               </button>
             </div>
           </ScreenPanel>
 
-          <ScreenPanel title="流量趋势 · 购物 / 短视频 / 直播">
+          <ScreenPanel title="学习趋势 · 订单 / 视频 / 试卷 / 辅导 / 直播课">
             <TrafficLineChart
               :data="data.trafficTrend"
               :focus-module="focusModule"
@@ -287,7 +359,7 @@ onUnmounted(() => {
         </div>
 
         <div class="col col--center">
-          <ScreenPanel title="全国流量热力地图">
+          <ScreenPanel title="学员分布热力地图">
             <template #extra>
               <span class="screen__sync">更新 {{ formatUpdatedAt(data.updatedAt) }}</span>
             </template>
@@ -372,9 +444,9 @@ onUnmounted(() => {
 }
 
 .screen.is-fullscreen {
-  min-height: 100vh;
-  width: 100vw;
-  height: 100vh;
+  min-height: 100%;
+  width: 100%;
+  height: 100%;
   border: none;
   padding: 16px 20px 18px;
   gap: 14px;
@@ -492,6 +564,36 @@ onUnmounted(() => {
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
+  min-height: 32px;
+}
+
+.screen__fullscreen {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 40;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid rgba(34, 211, 238, 0.55);
+  background: linear-gradient(180deg, rgba(14, 116, 144, 0.55), rgba(8, 47, 73, 0.85));
+  color: #ecfeff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.25);
+}
+
+.screen__fullscreen:hover,
+.screen__fullscreen.is-on {
+  border-color: rgba(103, 232, 249, 0.85);
+  background: linear-gradient(180deg, rgba(8, 145, 178, 0.8), rgba(14, 116, 144, 0.92));
+  box-shadow: 0 0 20px rgba(34, 211, 238, 0.4);
+}
+
+.screen.is-fullscreen .screen__fullscreen {
+  top: 20px;
+  right: 24px;
 }
 
 .screen__clock {
@@ -677,6 +779,7 @@ onUnmounted(() => {
 
 .module-cards {
   display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
 
@@ -704,17 +807,17 @@ onUnmounted(() => {
 }
 
 .module-card h4 {
-  margin: 0 0 8px;
-  font-size: 13px;
+  margin: 0 0 6px;
+  font-size: 12px;
   color: #e2e8f0;
 }
 
 .module-card p {
-  margin: 0 0 4px;
+  margin: 0 0 3px;
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  font-size: 12px;
+  font-size: 11px;
   color: #94a3b8;
 }
 
@@ -723,9 +826,13 @@ onUnmounted(() => {
   font-variant-numeric: tabular-nums;
 }
 
-.module-card--shop { border-left: 2px solid #2dd4bf; }
+.module-card--order { border-left: 2px solid #2dd4bf; }
 .module-card--video { border-left: 2px solid #38bdf8; }
-.module-card--live { border-left: 2px solid #f59e0b; }
+.module-card--exam { border-left: 2px solid #a78bfa; }
+.module-card--production { border-left: 2px solid #f472b6; }
+.module-card--offline { border-left: 2px solid #34d399; }
+.module-card--supervise { border-left: 2px solid #818cf8; }
+.module-card--live { border-left: 2px solid #f59e0b; grid-column: 1 / -1; }
 
 .rank,
 .events {
@@ -809,7 +916,7 @@ onUnmounted(() => {
 
 .events li {
   display: grid;
-  grid-template-columns: 58px auto 1fr;
+  grid-template-columns: 58px auto minmax(0, 1fr);
   gap: 8px;
   align-items: center;
   font-size: 12px;
@@ -831,15 +938,20 @@ onUnmounted(() => {
 }
 
 .events__tag {
-  min-width: 42px;
+  min-width: 52px;
   text-align: center;
   padding: 1px 6px;
   font-size: 10px;
   background: rgba(148, 163, 184, 0.12);
+  white-space: nowrap;
 }
 
-.events__tag.is-shop { color: #5eead4; background: rgba(45, 212, 191, 0.12); }
+.events__tag.is-order { color: #5eead4; background: rgba(45, 212, 191, 0.12); }
 .events__tag.is-video { color: #7dd3fc; background: rgba(56, 189, 248, 0.12); }
+.events__tag.is-exam { color: #c4b5fd; background: rgba(167, 139, 250, 0.12); }
+.events__tag.is-production { color: #f9a8d4; background: rgba(244, 114, 182, 0.12); }
+.events__tag.is-offline { color: #6ee7b7; background: rgba(52, 211, 153, 0.12); }
+.events__tag.is-supervise { color: #a5b4fc; background: rgba(129, 140, 248, 0.12); }
 .events__tag.is-live { color: #fbbf24; background: rgba(245, 158, 11, 0.12); }
 
 .events__msg {

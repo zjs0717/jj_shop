@@ -24,8 +24,12 @@ let chart: echarts.ECharts | null = null
 let resizeObserver: ResizeObserver | null = null
 
 const colors: Record<string, string> = {
-  shop: '#2dd4bf',
+  order: '#2dd4bf',
   video: '#38bdf8',
+  exam: '#a78bfa',
+  production: '#f472b6',
+  offline: '#34d399',
+  supervise: '#818cf8',
   live: '#f59e0b',
 }
 
@@ -104,7 +108,7 @@ function scatterData() {
       shadowBlur: props.focusCity === r.name ? 22 : 10,
       shadowColor: colors[r.module] || '#38bdf8',
     },
-    symbolSize: props.focusCity === r.name ? 22 : 12 + Math.min(14, r.value / 1200),
+    symbolSize: props.focusCity === r.name ? 22 : 10 + Math.min(16, r.value / 22),
   }))
 }
 
@@ -490,10 +494,15 @@ onUnmounted(() => {
   grid-column: 2;
   font-size: 10px;
   color: #64748b;
+  white-space: nowrap;
 }
 
-.map__rank .mod.is-shop { color: #5eead4; }
+.map__rank .mod.is-order { color: #5eead4; }
 .map__rank .mod.is-video { color: #7dd3fc; }
+.map__rank .mod.is-exam { color: #c4b5fd; }
+.map__rank .mod.is-production { color: #f9a8d4; }
+.map__rank .mod.is-offline { color: #6ee7b7; }
+.map__rank .mod.is-supervise { color: #a5b4fc; }
 .map__rank .mod.is-live { color: #fbbf24; }
 
 .map__rank strong {
